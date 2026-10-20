@@ -166,9 +166,12 @@ def clear_failed_flag_and_restart(duthost, container_name):
 
 
 def restart_service_with_startlimit_guard(duthost, service_name, is_namespaced=False,
-                                          backoff_seconds=30, verify_timeout=180):
+                                          backoff_seconds=30, verify_timeout=180, container_name=None):
     """
     Restart a systemd-managed service with StartLimitHit guard.
+
+    Pass an explicit service_name and container_name to target a specific ASIC
+    instance. Otherwise, is_namespaced selects instance 0 as before.
 
     Strategy:
     0) Pre-detect StartLimitHit and, if present, skip a failing restart
@@ -182,12 +185,13 @@ def restart_service_with_startlimit_guard(duthost, service_name, is_namespaced=F
     Returns: True when the service is (re)started and running; asserts on failure.
     """
 
-    if is_namespaced:
-        # just check first namespaced instance
-        container_name = "{}0".format(service_name)
-        service_name = "{}@0".format(service_name)
-    else:
-        container_name = service_name
+    if container_name is None:
+        if is_namespaced:
+            # just check first namespaced instance
+            container_name = "{}0".format(service_name)
+            service_name = "{}@0".format(service_name)
+        else:
+            container_name = service_name
 
     # 0) Pre-detect StartLimitHit so we can optionally skip a failing restart
     pre_rate_limited = is_hitting_start_limit(duthost, service_name)

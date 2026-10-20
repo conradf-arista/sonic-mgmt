@@ -8,6 +8,7 @@ from tests.common.macsec.recovery_helpers import (
     dirty_kill_macsec_container,
     get_egress_encoding_ans,
     graceful_restart_macsec,
+    macsec_namespace_prefixes,
     set_rekey_period,
     snapshot_appl_db_saks,
     wait_for_macsec_container,
@@ -71,39 +72,47 @@ def force_dut_key_server(macsec_duthost, profile_name, ctrl_links,
     """
     duthost = macsec_duthost
 
-    orig_priority = duthost.shell(
-        "sonic-db-cli CONFIG_DB HGET 'MACSEC_PROFILE|{}' priority".format(
-            profile_name),
-        module_ignore_errors=True,
-    )["stdout"].strip() or "64"
-    orig_rekey = duthost.shell(
-        "sonic-db-cli CONFIG_DB HGET 'MACSEC_PROFILE|{}' rekey_period".format(
-            profile_name),
-        module_ignore_errors=True,
-    )["stdout"].strip() or "0"
-    logger.info("force_dut_key_server: original priority=%s rekey_period=%s, "
-                "forcing priority to 0", orig_priority, orig_rekey)
+    original_settings = {}
+    for ns_prefix in macsec_namespace_prefixes(duthost):
+        orig_priority = duthost.shell(
+            "sonic-db-cli {} CONFIG_DB HGET 'MACSEC_PROFILE|{}' priority".format(
+                ns_prefix, profile_name),
+            module_ignore_errors=False,
+        )["stdout"].strip() or "64"
+        orig_rekey = duthost.shell(
+            "sonic-db-cli {} CONFIG_DB HGET 'MACSEC_PROFILE|{}' rekey_period".format(
+                ns_prefix, profile_name),
+            module_ignore_errors=False,
+        )["stdout"].strip() or "0"
+        original_settings[ns_prefix] = (orig_priority, orig_rekey)
 
-    duthost.shell(
-        "sonic-db-cli CONFIG_DB HSET 'MACSEC_PROFILE|{}' priority 0".format(
-            profile_name),
-        module_ignore_errors=False,
-    )
-    graceful_restart_macsec(duthost)
-    assert wait_for_mka_converged(
-        duthost, ctrl_links, policy, cipher_suite, send_sci), \
-        "MKA did not converge after forcing DUT KS priority"
+    try:
+        for ns_prefix, (orig_priority, orig_rekey) in original_settings.items():
+            logger.info("force_dut_key_server: namespace=%s original priority=%s "
+                        "rekey_period=%s, forcing priority to 0",
+                        ns_prefix or "global", orig_priority, orig_rekey)
+            duthost.shell(
+                "sonic-db-cli {} CONFIG_DB HSET 'MACSEC_PROFILE|{}' priority 0".format(
+                    ns_prefix, profile_name),
+                module_ignore_errors=False,
+            )
+        graceful_restart_macsec(duthost)
+        assert wait_for_mka_converged(
+            duthost, ctrl_links, policy, cipher_suite, send_sci), \
+            "MKA did not converge after forcing DUT KS priority"
 
-    yield
-
-    logger.info("force_dut_key_server teardown: restoring priority=%s "
-                "rekey_period=%s", orig_priority, orig_rekey)
-    duthost.shell(
-        "sonic-db-cli CONFIG_DB HSET 'MACSEC_PROFILE|{}' priority {} "
-        "rekey_period {}".format(profile_name, orig_priority, orig_rekey),
-        module_ignore_errors=False,
-    )
-    graceful_restart_macsec(duthost)
+        yield
+    finally:
+        for ns_prefix, (orig_priority, orig_rekey) in original_settings.items():
+            logger.info("force_dut_key_server teardown: namespace=%s restoring "
+                        "priority=%s rekey_period=%s", ns_prefix or "global",
+                        orig_priority, orig_rekey)
+            duthost.shell(
+                "sonic-db-cli {} CONFIG_DB HSET 'MACSEC_PROFILE|{}' priority {} "
+                "rekey_period {}".format(ns_prefix, profile_name, orig_priority, orig_rekey),
+                module_ignore_errors=False,
+            )
+        graceful_restart_macsec(duthost)
 
 
 @pytest.mark.backstop
